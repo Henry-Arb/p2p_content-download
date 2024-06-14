@@ -19,7 +19,7 @@ typedef struct pdu {
     char data[100];
 } pdu;
 
-void registerContent();
+void registerContent(pdu);
 void searchContent();
 void deregisterContent();
 void listOnLineRegisteredContent();
@@ -92,11 +92,9 @@ int main(int argc, char** argv){
         
         pdu commandPDU;
         memcpy(&commandPDU, serverBuffer, sizeof(pdu));
-
         switch(commandPDU.type){
-            case 'R':
-                printf("%s\n", commandPDU.data);
-                registerContent();
+            case 'R':                
+                registerContent(commandPDU);
                 break;            
             case 'T':
                 printf("%s\n", commandPDU.data);
@@ -117,8 +115,22 @@ int main(int argc, char** argv){
     return 0;
 }
 
-void registerContent(){
-    printf("Content Registration\n");
+void registerContent(pdu registerCommandPDU){
+    // De-stuffing: Extract peer name and content name
+    char peerName[11];
+    char contentName[11];
+
+    memcpy(peerName, registerCommandPDU.data, 10);
+    memcpy(contentName, registerCommandPDU.data + 10, 10);
+
+    peerName[10] = '\0';  // Ensure null termination
+    contentName[10] = '\0';  // Ensure null termination
+
+    // Print extracted names for verification
+    printf("Extracted Peer Name: %s.\n", peerName);
+    printf("Extracted Content Name: %s.\n", contentName);
+
+    // to do ...
 }
 
 void deregisterContent(){
