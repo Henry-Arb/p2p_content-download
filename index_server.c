@@ -26,7 +26,11 @@ typedef struct content_node {
     struct content_node* next;
 } content_node;
 
-content_node* head = NULL; //make global
+content_node* head = NULL; //make global makes shi easier
+
+void registerContent(int, struct sockaddr_in*, socklen_t, pdu);
+void deregisterContent(int, struct sockaddr_in*, socklen_t, pdu);
+void listOnlineContent(int, struct sockaddr_in*, socklen_t);
 
 content_node* createContentNode(char* peerName, char* contentName, uint16_t port) {
     content_node* newNode = malloc(sizeof(content_node));
@@ -35,9 +39,9 @@ content_node* createContentNode(char* peerName, char* contentName, uint16_t port
         exit(1);
     }
     strncpy(newNode->peerName, peerName, sizeof(newNode->peerName) - 1);
-    newNode->peerName[sizeof(newNode->peerName) - 1] = '\0'; // null terminate
+    newNode->peerName[sizeof(newNode->peerName) - 1] = '\0';        // null terminate
     strncpy(newNode->contentName, contentName, sizeof(newNode->contentName) - 1);
-    newNode->contentName[sizeof(newNode->contentName) - 1] = '\0'; // null terminate
+    newNode->contentName[sizeof(newNode->contentName) - 1] = '\0';  // null terminate
     newNode->port = port;
     newNode->next = NULL;
     return newNode;
@@ -66,11 +70,6 @@ int checkContentConflict(content_node* head, char* peerName, char* contentName) 
     }
     return 0; //no flag if no conflict
 }
-
-void registerContent(int, struct sockaddr_in*, socklen_t, pdu);
-void searchContent();
-void deregisterContent();
-void listOnlineContent(int, struct sockaddr_in*, socklen_t);
 
 int main(int argc, char** argv){    
     /* get&set server port # */
@@ -144,8 +143,7 @@ int main(int argc, char** argv){
                 registerContent(serverSocketDescriptor, &clientSocketAddr, clientSocketAddrLength, commandPDU);
                 break;            
             case 'T':
-                printf("%s\n", commandPDU.data);
-                deregisterContent();
+                deregisterContent(serverSocketDescriptor, &clientSocketAddr, clientSocketAddrLength, commandPDU);
                 break;
             case 'O':
                 listOnlineContent(serverSocketDescriptor, &clientSocketAddr, clientSocketAddrLength); // new case
@@ -169,14 +167,14 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
     // De-stuffing
     char peerName[11];
     char contentName[11];
-    uint16_t port; 
+    uint16_t port;
 
     memcpy(peerName, registerCommandPDU.data, 10);
     memcpy(contentName, registerCommandPDU.data + 10, 10);
     memcpy(&port, registerCommandPDU.data + 20, sizeof(port));
-    peerName[10] = '\0'; //null terminate
+    peerName[10] = '\0';    //null terminate
     contentName[10] = '\0'; //null terminate
-    port = ntohs(port);
+    port = ntohs(port); //turning it back to host-byte format
 
     if (checkContentConflict(head, peerName, contentName)) {
         // Send E-type PDU if conflict found
@@ -201,13 +199,47 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
         sendto(serverSocketDescriptor, &acknowledgementPDU, sizeof(acknowledgementPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
     }
 
-    printf("Extracted Peer Name: %s.\n", peerName);
-    printf("Extracted Content Name: %s.\n", contentName);
-    printf("Extracted Port Number: %d.\n", port);
+    printf("Extracted Peer Name:\t\t%s\n", peerName);
+    printf("Extracted Content Name:\t\t%s\n", contentName);
+    printf("Extracted Network Port Number:\t%d\n", htons(port)); 
+    printf("Converted Host Port Number:\t%d\n", port);       
 }
 
-void deregisterContent(){
-    printf("Content De-registration\n");
+void deregisterContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketAddr, socklen_t clientSocketAddrLength, pdu deregisterCommandPDU) {
+    char peerName[11];
+    char contentName[11];
+
+    memcpy(peerName, deregisterCommandPDU.data, 10);
+    memcpy(contentName, deregisterCommandPDU.data + 10, 10);
+    peerName[10] = '\0';    // Null terminate
+    contentName[10] = '\0'; // Null terminate
+
+    content_node* temp = head;
+    content_node* prev = NULL;
+
+    while (temp != NULL) {
+        if (strcmp(temp->peerName, peerName) == 0 && strcmp(temp->contentName, contentName) == 0) { //find the matching peer-name and content-name and unlink from linked list
+            if (prev == NULL) {
+                head = temp->next; 
+            } else {
+                prev->next = temp->next;
+            }
+            free(temp); //free the shi
+
+            pdu acknowledgementPDU;
+            acknowledgementPDU.type = 'A';
+            snprintf(acknowledgementPDU.data, sizeof(acknowledgementPDU.data), "Content de-registered successfully.");
+            sendto(serverSocketDescriptor, &acknowledgementPDU, sizeof(acknowledgementPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
+            return;
+        }
+        prev = temp;        //nextttt
+        temp = temp->next;  //nextttt
+    }
+
+    pdu errorPDU;
+    errorPDU.type = 'E';
+    snprintf(errorPDU.data, sizeof(errorPDU.data), "Content not found for de-registration.");
+    sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
 }
 
 void listOnlineContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketAddr, socklen_t clientSocketAddrLength) {
@@ -222,13 +254,9 @@ void listOnlineContent(int serverSocketDescriptor, struct sockaddr_in* clientSoc
     pdu responsePDU;
     responsePDU.type = 'O';
     strncpy(responsePDU.data, contentList, sizeof(responsePDU.data) - 1);
-    responsePDU.data[sizeof(responsePDU.data) - 1] = '\0'; // Ensure null termination
+    responsePDU.data[sizeof(responsePDU.data) - 1] = '\0';
 
     if ((sendto(serverSocketDescriptor, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength)) == -1){
         perror("sendto() failed");        
     }
-}
-
-void searchContent(){
-    printf("Search Registration\n");
 }
