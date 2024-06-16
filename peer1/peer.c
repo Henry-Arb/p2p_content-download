@@ -29,6 +29,7 @@ sd_node* head = NULL;   // Global variable for linked list head also makes it ea
 void registerContent(int, struct sockaddr_in*, pdu);
 void deregisterContent(int, struct sockaddr_in*, pdu);
 void listOnlineContent(int, struct sockaddr_in*);
+void quit(int, struct sockaddr_in*);
 void errorMessage(int, struct sockaddr_in*, pdu);
 void readAcknowledgement(int socketDescriptor, struct sockaddr_in* server_addr);
 
@@ -213,7 +214,12 @@ int main(int argc, char** argv){
         fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin);
         sscanf(tempCommandBuffer, " %c", &commandType);
     }
+    printf("\n****************************************************************\n");
+    printf("De-registering all content...\n");
+    quit(clientSocketDescriptorUDP, &indexServerSocketAddr);
+    printf("****************************************************************\n");
 
+    printf("\n\nEXITING PROGRAM.\n");
     close(clientSocketDescriptorUDP);
     exit(0);
 }
@@ -404,6 +410,51 @@ void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCo
     else {
         printf("Error from server: %s\n", responsePDU.data);
     }    
+}
+
+void quit(int sd, struct sockaddr_in* server_addr) {
+
+    /* 
+    unfortunately can't make use of the already existing 
+    deregisterContent() function since it actually
+    prompts for the name of the content instead of automatically
+    removing from linked list    
+    */
+
+    sd_node* temp = head;
+    pdu commandPDU;
+    commandPDU.type = 'T';
+
+    while (temp != NULL) {
+        sd_node* next = temp->next;
+        memset(commandPDU.data, 0, sizeof(commandPDU.data));
+
+        memcpy(commandPDU.data, peerName, sizeof(peerName));
+        memcpy(commandPDU.data + 10, temp->contentName, sizeof(temp->contentName));
+        
+        if (sendto(sd, &commandPDU, sizeof(commandPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in)) == -1) {
+            perror("sendto() failed");
+        }
+
+        pdu responsePDU;
+        int addr_len = sizeof(struct sockaddr_in);
+        int n;
+        if ((n = recvfrom(sd, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)server_addr, &addr_len)) == -1) {
+            perror("recvfrom error\n");
+        }
+
+        if (responsePDU.type == 'A') {
+            printf("Acknowledgement from server: %s\n", responsePDU.data);
+            close(temp->sd);  // Close the TCP socket
+            free(temp);       // Free the memory
+        } 
+        else {
+            printf("Error from server: %s\n", responsePDU.data);
+        }
+        temp = next;
+    }
+
+    head = NULL; // idk if this makes a diff
 }
 
 void errorMessage(int sd, struct sockaddr_in* server_addr, pdu errorCommandPDU){
