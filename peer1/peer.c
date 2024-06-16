@@ -11,6 +11,7 @@
 
 #define DEFAULT_PORT_NUMBER     3000
 #define DEFAULT_HOST_NAME       "localhost"
+#define CONTENT_SERVER_BACKLOG  10
 
 typedef struct pdu {
     char type;
@@ -29,6 +30,7 @@ sd_node* head = NULL;   // Global variable for linked list head also makes it ea
 void registerContent(int, struct sockaddr_in*, pdu);
 void deregisterContent(int, struct sockaddr_in*, pdu);
 void listOnlineContent(int, struct sockaddr_in*);
+void searchContent(int, struct sockaddr_in*);
 void quit(int, struct sockaddr_in*);
 void errorMessage(int, struct sockaddr_in*, pdu);
 void readAcknowledgement(int socketDescriptor, struct sockaddr_in* server_addr);
@@ -201,6 +203,9 @@ int main(int argc, char** argv){
             case 'O':
                 listOnlineContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
                 break;
+            case 'S':
+                searchContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
+                break;
             case 'E':
                 errorMessage(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
                 readAcknowledgement(clientSocketDescriptorUDP, &indexServerSocketAddr);
@@ -259,6 +264,11 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
 
     if ( (bind(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, sizeof(reg_addr))) == -1){
         perror("Couldn't bind server sd to address struct");
+        exit(EXIT_FAILURE);
+    }
+
+    if((listen(clientSocketDescriptorTCP, CONTENT_SERVER_BACKLOG)) == -1){
+        perror("Listening error");
         exit(EXIT_FAILURE);
     }
 
@@ -410,6 +420,55 @@ void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCo
     else {
         printf("Error from server: %s\n", responsePDU.data);
     }    
+}
+
+void searchContent(int sd, struct sockaddr_in* server_addr) {
+    pdu searchCommandPDU;
+    searchCommandPDU.type = 'S';    
+    
+    memset(searchCommandPDU.data, 0, sizeof(searchCommandPDU.data)); // zero out
+
+    char contentName[11];
+    char tempContentNameBuffer[100];
+    printf("Name of Content to Search (10 char long) -> ");
+    fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
+    sscanf(tempContentNameBuffer, "%10s", contentName);
+    while(tempContentNameBuffer[0] == '\n'){ // Handle user pressing Enter key
+        printf("Name of Content to Search (10 char long) -> ");
+        fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
+        sscanf(tempContentNameBuffer, "%10s", contentName);
+    }
+    contentName[10] = '\0';
+
+    memcpy(searchCommandPDU.data, peerName, sizeof(peerName));              // Bytes 0-10 for peer name
+    memcpy(searchCommandPDU.data + 10, contentName, strlen(contentName));   // Bytes 10-20 for content name
+
+    if (sendto(sd, &searchCommandPDU, sizeof(searchCommandPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in)) == -1) {
+        perror("sendto() failed");
+        exit(EXIT_FAILURE);
+    }
+
+    pdu responsePDU;
+    int addr_len = sizeof(struct sockaddr_in);
+    int n;
+    if ((n = recvfrom(sd, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)server_addr, &addr_len)) == -1) {
+        perror("recvfrom error\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (responsePDU.type == 'S') {
+        uint16_t networkBytePort;
+        memcpy(&networkBytePort, responsePDU.data, sizeof(uint16_t));
+        uint16_t hostBytePort = ntohs(networkBytePort);
+        printf("Content found at\thost port:\t%u\n", (unsigned int)hostBytePort);
+        printf("\t\t\tnetwork port:\t%u\n", (unsigned int)networkBytePort);
+    } 
+    else if (responsePDU.type == 'E') {
+        printf("Error from server: %s\n", responsePDU.data);
+    } 
+    else {
+        printf("Unexpected response from server.\n");
+    }
 }
 
 void quit(int sd, struct sockaddr_in* server_addr) {

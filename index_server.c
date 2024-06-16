@@ -31,6 +31,7 @@ content_node* head = NULL; //make global makes shi easier
 void registerContent(int, struct sockaddr_in*, socklen_t, pdu);
 void deregisterContent(int, struct sockaddr_in*, socklen_t, pdu);
 void listOnlineContent(int, struct sockaddr_in*, socklen_t);
+void searchContent(int, struct sockaddr_in*, socklen_t, pdu);
 
 content_node* createContentNode(char* peerName, char* contentName, uint16_t port) {
     content_node* newNode = malloc(sizeof(content_node));
@@ -146,8 +147,11 @@ int main(int argc, char** argv){
                 deregisterContent(serverSocketDescriptor, &clientSocketAddr, clientSocketAddrLength, commandPDU);
                 break;
             case 'O':
-                listOnlineContent(serverSocketDescriptor, &clientSocketAddr, clientSocketAddrLength); // new case
-                break;            
+                listOnlineContent(serverSocketDescriptor, &clientSocketAddr, clientSocketAddrLength);
+                break;
+            case 'S':
+                searchContent(serverSocketDescriptor, &clientSocketAddr, clientSocketAddrLength, commandPDU);
+                break;
             case 'E':
                 printf("Error Message\n");
                 printf("%s\n", commandPDU.data);
@@ -171,19 +175,17 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
 
     memcpy(peerName, registerCommandPDU.data, 10);
     memcpy(contentName, registerCommandPDU.data + 10, 10);
-    memcpy(&port, registerCommandPDU.data + 20, sizeof(port));
+    memcpy(&port, registerCommandPDU.data + 20, sizeof(uint16_t));
     peerName[10] = '\0';    //null terminate
     contentName[10] = '\0'; //null terminate
-    port = ntohs(port); //turning it back to host-byte format
+    port = ntohs(port);     //turning it back to host-byte format
 
-    if (checkContentConflict(head, peerName, contentName)) {
-        // Send E-type PDU if conflict found
+    if (checkContentConflict(head, peerName, contentName)) {        
         pdu errorPDU;
         errorPDU.type = 'E';
         snprintf(errorPDU.data, sizeof(errorPDU.data), "Conflict: %s already registered as %s", contentName, peerName);
         sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
-    } else {
-        // Insert new content node
+    } else {        
         insertContentNodeAtEnd(&head, peerName, contentName, port);
 
         // Send A-type PDU if registration successful
@@ -201,8 +203,8 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
 
     printf("Extracted Peer Name:\t\t%s\n", peerName);
     printf("Extracted Content Name:\t\t%s\n", contentName);
-    printf("Extracted Network Port Number:\t%d\n", htons(port)); 
-    printf("Converted Host Port Number:\t%d\n", port);       
+    printf("Extracted Network Port Number:\t%u\n", (unsigned int)htons(port)); 
+    printf("Converted Host Port Number:\t%u\n", (unsigned int)port);       
 }
 
 void deregisterContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketAddr, socklen_t clientSocketAddrLength, pdu deregisterCommandPDU) {
@@ -259,4 +261,33 @@ void listOnlineContent(int serverSocketDescriptor, struct sockaddr_in* clientSoc
     if ((sendto(serverSocketDescriptor, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength)) == -1){
         perror("sendto() failed");        
     }
+}
+
+void searchContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketAddr, socklen_t clientSocketAddrLength, pdu searchCommandPDU) {
+    char peerName[11];
+    char contentName[11];
+
+    memcpy(peerName, searchCommandPDU.data, 10);
+    memcpy(contentName, searchCommandPDU.data + 10, 10);
+    peerName[10] = '\0';    // Null terminate
+    contentName[10] = '\0'; // Null terminate
+
+    content_node* temp = head;
+    while (temp != NULL) {
+        if (strcmp(temp->contentName, contentName) == 0) {
+            pdu responsePDU;
+            responsePDU.type = 'S';
+            uint16_t networkBytePort = htons(temp->port);
+            printf("sending network_port=%u\n", (unsigned int)networkBytePort);
+            memcpy(responsePDU.data, &networkBytePort, sizeof(networkBytePort));
+            sendto(serverSocketDescriptor, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
+            return;
+        }
+        temp = temp->next;
+    }
+    
+    pdu errorPDU;
+    errorPDU.type = 'E';
+    snprintf(errorPDU.data, sizeof(errorPDU.data), "Content not found.");
+    sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
 }
