@@ -30,7 +30,8 @@ sd_node* head = NULL;   // Global variable for linked list head also makes it ea
 void registerContent(int, struct sockaddr_in*, pdu);
 void deregisterContent(int, struct sockaddr_in*, pdu);
 void listOnlineContent(int, struct sockaddr_in*);
-void searchContent(int, struct sockaddr_in*);
+void downloadContent(int, struct sockaddr_in*);
+uint16_t searchContent(int, struct sockaddr_in*);
 void quit(int, struct sockaddr_in*);
 void errorMessage(int, struct sockaddr_in*, pdu);
 void readAcknowledgement(int socketDescriptor, struct sockaddr_in* server_addr);
@@ -203,8 +204,8 @@ int main(int argc, char** argv){
             case 'O':
                 listOnlineContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
                 break;
-            case 'S':
-                searchContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
+            case 'D':
+                downloadContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
                 break;
             case 'E':
                 errorMessage(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
@@ -422,7 +423,20 @@ void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCo
     }    
 }
 
-void searchContent(int sd, struct sockaddr_in* server_addr) {
+void downloadContent(int sd, struct sockaddr_in* server_addr){   
+    uint16_t contentPort_networkByte = searchContent(sd, server_addr);
+    if (contentPort_networkByte == 0){
+        return;
+    }
+    
+    uint16_t contentPort_hostByte = ntohs(contentPort_networkByte);
+    printf("Content found at\thost port:\t%u\n", (unsigned int)contentPort_hostByte);
+    printf("\t\t\tnetwork port:\t%u\n", (unsigned int)contentPort_networkByte);
+
+    printf("starting downloading procedure...\n");
+}
+
+uint16_t searchContent(int sd, struct sockaddr_in* server_addr) {
     pdu searchCommandPDU;
     searchCommandPDU.type = 'S';    
     
@@ -458,17 +472,16 @@ void searchContent(int sd, struct sockaddr_in* server_addr) {
 
     if (responsePDU.type == 'S') {
         uint16_t networkBytePort;
-        memcpy(&networkBytePort, responsePDU.data, sizeof(uint16_t));
-        uint16_t hostBytePort = ntohs(networkBytePort);
-        printf("Content found at\thost port:\t%u\n", (unsigned int)hostBytePort);
-        printf("\t\t\tnetwork port:\t%u\n", (unsigned int)networkBytePort);
+        memcpy(&networkBytePort, responsePDU.data, sizeof(uint16_t));        
+        return networkBytePort;
     } 
     else if (responsePDU.type == 'E') {
         printf("Error from server: %s\n", responsePDU.data);
-    } 
-    else {
-        printf("Unexpected response from server.\n");
+        return 0;
     }
+    
+    printf("Unexpected response from server.\n");  
+    return 0;
 }
 
 void quit(int sd, struct sockaddr_in* server_addr) {
