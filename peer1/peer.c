@@ -13,6 +13,7 @@
 #define DEFAULT_PORT_NUMBER     3000
 #define DEFAULT_HOST_NAME       "localhost"
 #define CONTENT_SERVER_BACKLOG  10
+#define CONTENT_CHUNK_SIZE      100
 
 typedef struct pdu {
     char type;
@@ -32,7 +33,7 @@ void registerContent(int, struct sockaddr_in*, pdu, fd_set*);
 void deregisterContent(int, struct sockaddr_in*, pdu, fd_set*, fd_set*);
 void listOnlineContent(int, struct sockaddr_in*);
 void downloadContent(int, struct sockaddr_in*);
-uint16_t searchContent(int, struct sockaddr_in*);
+uint16_t searchContent(int, struct sockaddr_in*, char*);
 void provideContent(int);
 void quit(int, struct sockaddr_in*);
 void errorMessage(int, struct sockaddr_in*, pdu);
@@ -166,7 +167,7 @@ int main(int argc, char** argv){
     printf("Choose a username -> ");    
     fgets(tempNameBuffer, sizeof(tempNameBuffer), stdin);
     sscanf(tempNameBuffer, "%10s", peerName);    
-    peerName[10] = '\0'; // Ensure null termination    
+    peerName[10] = '\0'; // null terminate
     printf("Hi %s.\n", peerName);
     
     /* prompt user for a command */
@@ -184,7 +185,7 @@ int main(int argc, char** argv){
 
     while (1) {
         printf("Command (type '?' for list of commands) -> ");
-        fflush(stdout); // Ensure the prompt is printed
+        fflush(stdout);
         
         ready_sockets = current_sockets;
 
@@ -320,7 +321,7 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
         fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
         sscanf(tempContentNameBuffer, "%10s", contentName);
     }
-    contentName[10] = '\0'; // Ensure null termination
+    contentName[10] = '\0';
 
     /* zero out the data field of the pdu, just in case */
     memset(registerCommandPDU.data, 0, sizeof(registerCommandPDU.data));
@@ -412,7 +413,7 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
         printf("Choose a new username -> ");
         fgets(tempNameBuffer, sizeof(tempNameBuffer), stdin);
         sscanf(tempNameBuffer, "%10s", peerName);
-        peerName[10] = '\0'; // Ensure null termination
+        peerName[10] = '\0';
         printf("Resending %s as %s.\n", contentName, peerName);
 
         memset(registerCommandPDU.data, 0, sizeof(registerCommandPDU.data));
@@ -475,7 +476,7 @@ void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCo
         fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
         sscanf(tempContentNameBuffer, "%10s", contentName);
     }
-    contentName[10] = '\0'; // Ensure null termination
+    contentName[10] = '\0';
 
     memset(deregisterCommandPDU.data, 0, sizeof(deregisterCommandPDU.data));    // zero out
     memcpy(deregisterCommandPDU.data, peerName, sizeof(peerName));              // set
@@ -532,7 +533,8 @@ void provideContent(int server_sd) {
         return;
     }
 
-    char buffer[100];
+    /*
+    char buffer[100];   //TESTING RECEIVING
     int bytes_received = recv(client_sd, buffer, sizeof(buffer) - 1, 0);
     if (bytes_received == -1) {
         perror("recv error");
@@ -542,19 +544,68 @@ void provideContent(int server_sd) {
         printf("\nMessage from the requesting peer: %s\n", buffer);
     }
 
-    const char *message = "HELLO HERE 2 GIB U GUD STUFF!";
+    const char *message = "HELLO HERE 2 GIB U GUD STUFF!"; //TESTING MESSAGING
     if (send(client_sd, message, strlen(message), 0) == -1) {
         perror("send error");
         return;
+    }*/
+
+    pdu requestPDU;
+    int bytes_received = recv(client_sd, &requestPDU, sizeof(requestPDU), 0);
+    if (bytes_received == -1) {
+        perror("recv error");
+        close(client_sd);
+        return;
     }
 
+    if (requestPDU.type != 'D') {
+        perror("Unexpected PDU type received");
+        close(client_sd);
+        return;
+    }
+
+    char contentName[11];
+    strncpy(contentName, requestPDU.data, 10);
+    contentName[10] = '\0';
+
+    FILE *contentFile = fopen(contentName, "rb");
+    if (contentFile == NULL) {
+        perror("File not found");
+        close(client_sd);
+        return;
+    }
+
+    pdu responsePDU;
+    responsePDU.type = 'C';
+    size_t bytesRead;
+    while ((bytesRead = fread(responsePDU.data, 1, CONTENT_CHUNK_SIZE, contentFile)) > 0) {
+        if (send(client_sd, &responsePDU, sizeof(pdu), 0) == -1) {
+            perror("send error");
+            fclose(contentFile);
+            close(client_sd);
+            return;
+        }
+    }
+
+    fclose(contentFile);
     close(client_sd);    
 }
 
-void downloadContent(int sd, struct sockaddr_in* server_addr){   
+void downloadContent(int sd, struct sockaddr_in* server_addr){
+    char contentName[11];
+    char tempContentNameBuffer[100];
+    printf("Name of Content to Download (10 char long) -> ");
+    fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
+    sscanf(tempContentNameBuffer, "%10s", contentName);
+    while(tempContentNameBuffer[0] == '\n'){ // Handle user pressing Enter key
+        printf("Name of Content to Download (10 char long) -> ");
+        fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
+        sscanf(tempContentNameBuffer, "%10s", contentName);
+    }
+    contentName[10] = '\0';
     
     /* request index server to search for a content provider. returns port # (host byte format)*/
-    uint16_t contentPort_networkByte = searchContent(sd, server_addr);
+    uint16_t contentPort_networkByte = searchContent(sd, server_addr, contentName);
     if (contentPort_networkByte == 0){
         return;
     }
@@ -588,14 +639,15 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
         return;
     }
     
-    const char *message = "Hello from the requesting peer.";
+    /*    
+    const char *message = "Hello from the requesting peer."; //TESTING MESSAGING
     if (send(sd_providerLink, message, strlen(message), 0) == -1) {
         perror("send error");
         close(sd_providerLink);
         return;
     }
     
-    char buffer[100];
+    char buffer[100];   // TESTING RECEIVING
     int bytes_received = recv(sd_providerLink, buffer, sizeof(buffer) - 1, 0);
     if (bytes_received == -1) {
         perror("recv error");
@@ -603,7 +655,46 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
     } else {
         buffer[bytes_received] = '\0';
         printf("Message from the content provider: %s\n", buffer);
+    }*/
+
+    pdu requestPDU;
+    requestPDU.type = 'D';
+    strncpy(requestPDU.data, contentName, sizeof(requestPDU.data) - 1);
+    requestPDU.data[sizeof(requestPDU.data) - 1] = '\0';
+
+    if (send(sd_providerLink, &requestPDU, sizeof(requestPDU), 0) == -1) {
+        perror("send error");
+        close(sd_providerLink);
+        return;
     }
+
+    FILE *contentFile = fopen(contentName, "wb");
+    if (contentFile == NULL) {
+        perror("File open error");
+        close(sd_providerLink);
+        return;
+    }
+
+    pdu responsePDU;
+    int bytes_received;
+    while ((bytes_received = recv(sd_providerLink, &responsePDU, sizeof(responsePDU), 0)) > 0) {
+        if (responsePDU.type != 'C') {
+            perror("Unexpected PDU type received");
+            break;
+        }
+        fwrite(responsePDU.data, 1, bytes_received - sizeof(char), contentFile);
+    }
+
+    fclose(contentFile);
+    close(sd_providerLink);
+
+    if (bytes_received == -1) {
+        perror("recv error");
+        return;
+    }
+
+    printf("Content downloaded successfully.\n");
+
 
     close(sd_providerLink);
 }
@@ -612,27 +703,16 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
 /** 
  * @sd: The socket descriptor for communication with the index server.
  * @server_addr: The sockaddr_in structure containing the index server address.
+ * @contentName: the content the requesting peer is searching
  *
  * Return: The network byte order port number of the peer with the requested content, 
  *         or 0 if an error occurs or the content is not found.
  */
-uint16_t searchContent(int sd, struct sockaddr_in* server_addr) {
+uint16_t searchContent(int sd, struct sockaddr_in* server_addr, char* contentName) {
     pdu searchCommandPDU;
     searchCommandPDU.type = 'S';    
     
-    memset(searchCommandPDU.data, 0, sizeof(searchCommandPDU.data)); // zero out
-
-    char contentName[11];
-    char tempContentNameBuffer[100];
-    printf("Name of Content to Search (10 char long) -> ");
-    fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
-    sscanf(tempContentNameBuffer, "%10s", contentName);
-    while(tempContentNameBuffer[0] == '\n'){ // Handle user pressing Enter key
-        printf("Name of Content to Search (10 char long) -> ");
-        fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
-        sscanf(tempContentNameBuffer, "%10s", contentName);
-    }
-    contentName[10] = '\0';
+    memset(searchCommandPDU.data, 0, sizeof(searchCommandPDU.data));        // zero out
 
     memcpy(searchCommandPDU.data, peerName, sizeof(peerName));              // Bytes 0-10 for peer name
     memcpy(searchCommandPDU.data + 10, contentName, strlen(contentName));   // Bytes 10-20 for content name

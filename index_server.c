@@ -131,7 +131,7 @@ int main(int argc, char** argv){
         // char pts[100];
         // (void) time(&now);
         // strncpy(pts, ctime(&now), sizeof(pts) - 1);
-        // pts[sizeof(pts) - 1] = '\0'; // Ensure null termination
+        // pts[sizeof(pts) - 1] = '\0'; //
         // pdu acknowledgementPDU;
         // acknowledgementPDU.type = 'A';
         // snprintf(acknowledgementPDU.data, sizeof(acknowledgementPDU.data), "Command received at %s", pts);
@@ -193,7 +193,7 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
         char pts[100];
         (void)time(&now);
         strncpy(pts, ctime(&now), sizeof(pts) - 1);
-        pts[sizeof(pts) - 1] = '\0'; // Ensure null termination
+        pts[sizeof(pts) - 1] = '\0';
 
         pdu acknowledgementPDU;
         acknowledgementPDU.type = 'A';
