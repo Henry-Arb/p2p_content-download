@@ -8,6 +8,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #define DEFAULT_PORT_NUMBER     3000
 #define DEFAULT_HOST_NAME       "localhost"
@@ -27,11 +28,12 @@ typedef struct sd_node {
 char peerName[11];      // Global variable for peer name makes it easier to deal with
 sd_node* head = NULL;   // Global variable for linked list head also makes it easier
 
-void registerContent(int, struct sockaddr_in*, pdu);
-void deregisterContent(int, struct sockaddr_in*, pdu);
+void registerContent(int, struct sockaddr_in*, pdu, fd_set*);
+void deregisterContent(int, struct sockaddr_in*, pdu, fd_set*, fd_set*);
 void listOnlineContent(int, struct sockaddr_in*);
 void downloadContent(int, struct sockaddr_in*);
 uint16_t searchContent(int, struct sockaddr_in*);
+void provideContent(int);
 void quit(int, struct sockaddr_in*);
 void errorMessage(int, struct sockaddr_in*, pdu);
 void readAcknowledgement(int socketDescriptor, struct sockaddr_in* server_addr);
@@ -100,7 +102,7 @@ void removeNodeBySpecificValue(sd_node** head, char* contentName) {
     
     if (temp == NULL) { // contentName not found in linked list
         return;
-    }    
+    }
     prev->next = temp->next; // Unlink current node from the linked list by making the prev node's pointer -> next node's pointer
     close(temp->sd);  // Close the TCP socket
     free(temp); // Free memory
@@ -170,56 +172,132 @@ int main(int argc, char** argv){
     /* prompt user for a command */
     char commandType;
     char tempCommandBuffer[100]; //temporary buffer for handling bad command inputs
-    printf("Command (type '?' for list of commands) -> ");
-    fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin);
-    sscanf(tempCommandBuffer, " %c", &commandType);
-    
-    while(commandType != 'Q'){
-        if (tempCommandBuffer[0] == '\n') {// in case user presses the Enter key
-            printf("Command (type '?' for list of commands) -> ");
-            fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin);
-            sscanf(tempCommandBuffer, " %c", &commandType);
-            continue;
-        }
-        
-        pdu commandPDU;
-        commandPDU.type = commandType;
-        switch(commandType){
-            case '?':
-                printf("\n[R]:\tContent Registration\n");
-                printf("[T]:\tContent De-egistration\n");
-                printf("[L]:\tList LOCAL Content\n");
-                printf("[D]:\tDownload Content\n");
-                printf("[O]:\tList ONLINE Content\n");
-                printf("[Q]:\tQuit\n\n");
-                break;
-            case 'R':
-                registerContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
-                printNodeList(head);
-                break;
-            case 'T':
-                deregisterContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
-                printNodeList(head);
-                break;
-            case 'O':
-                listOnlineContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
-                break;
-            case 'D':
-                downloadContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
-                break;
-            case 'E':
-                errorMessage(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
-                readAcknowledgement(clientSocketDescriptorUDP, &indexServerSocketAddr);
-                break;
-            default:
-                printf("Input Error.\n");
-                break;
-        }        
-        
+    // printf("Command (type '?' for list of commands) -> ");
+    // fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin);
+    // sscanf(tempCommandBuffer, " %c", &commandType);    
+
+    fd_set current_sockets, ready_sockets;
+    FD_ZERO(&current_sockets);
+    FD_ZERO(&ready_sockets);
+
+    FD_SET(fileno(stdin), &current_sockets);
+
+    while (1) {
         printf("Command (type '?' for list of commands) -> ");
-        fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin);
-        sscanf(tempCommandBuffer, " %c", &commandType);
+        fflush(stdout); // Ensure the prompt is printed
+        
+        ready_sockets = current_sockets;
+
+        // Use select to monitor stdin and TCP sockets
+        if (select(FD_SETSIZE, &ready_sockets, NULL, NULL, NULL) < 0) {
+            perror("select error");
+            exit(EXIT_FAILURE);
+        }
+
+        if (FD_ISSET(fileno(stdin), &ready_sockets)) {
+            char commandType;
+            char tempCommandBuffer[100];
+            
+            if (fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin) != NULL) {
+                sscanf(tempCommandBuffer, " %c", &commandType);
+
+                if (commandType == 'Q') {
+                    break;
+                }
+
+                pdu commandPDU;
+                commandPDU.type = commandType;
+                switch (commandType) {
+                    case '?':
+                        printf("\n[R]:\tContent Registration\n");
+                        printf("[T]:\tContent De-registration\n");
+                        printf("[L]:\tList LOCAL Content\n");
+                        printf("[D]:\tDownload Content\n");
+                        printf("[O]:\tList ONLINE Content\n");
+                        printf("[Q]:\tQuit\n\n");
+                        break;
+                    case 'R':
+                        registerContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU, &current_sockets);
+                        printNodeList(head);
+                        break;
+                    case 'T':
+                        deregisterContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU, &current_sockets, &ready_sockets);
+                        printNodeList(head);
+                        break;
+                    case 'O':
+                        listOnlineContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
+                        break;
+                    case 'D':
+                        downloadContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
+                        break;
+                    case 'E':
+                        errorMessage(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
+                        readAcknowledgement(clientSocketDescriptorUDP, &indexServerSocketAddr);
+                        break;
+                    default:
+                        printf("Input Error.\n");
+                        break;
+                }                
+                printf("\n");
+            }
+        }
+
+        /* Check if the opps have intercepted our TCP sockets */
+        for (int i = 0; i < FD_SETSIZE; i++) {
+            if (FD_ISSET(i, &ready_sockets) && i != fileno(stdin)) {
+                provideContent(i);
+            }
+        }
     }
+    
+    // while(commandType != 'Q'){
+    //     if (tempCommandBuffer[0] == '\n') {// in case user presses the Enter key
+    //         printf("Command (type '?' for list of commands) -> ");
+    //         fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin);
+    //         sscanf(tempCommandBuffer, " %c", &commandType);
+    //         continue;
+    //     }
+        
+    //     pdu commandPDU;
+    //     commandPDU.type = commandType;
+    //     switch(commandType){
+    //         case '?':
+    //             printf("\n[R]:\tContent Registration\n");
+    //             printf("[T]:\tContent De-egistration\n");
+    //             printf("[L]:\tList LOCAL Content\n");
+    //             printf("[D]:\tDownload Content\n");
+    //             printf("[O]:\tList ONLINE Content\n");
+    //             printf("[Q]:\tQuit\n\n");
+    //             break;
+    //         case 'R':
+    //             registerContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU, &current_sockets);
+    //             printNodeList(head);
+    //             break;
+    //         case 'T':
+    //             deregisterContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
+    //             printNodeList(head);
+    //             break;
+    //         case 'O':
+    //             listOnlineContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
+    //             break;
+    //         case 'D':
+    //             downloadContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
+    //             break;
+    //         case 'E':
+    //             errorMessage(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
+    //             readAcknowledgement(clientSocketDescriptorUDP, &indexServerSocketAddr);
+    //             break;
+    //         default:
+    //             printf("Input Error.\n");
+    //             break;
+    //     }        
+        
+    //     printf("Command (type '?' for list of commands) -> ");
+    //     fgets(tempCommandBuffer, sizeof(tempCommandBuffer), stdin);
+    //     sscanf(tempCommandBuffer, " %c", &commandType);
+    // }
+
+
     printf("\n****************************************************************\n");
     printf("De-registering all content...\n");
     quit(clientSocketDescriptorUDP, &indexServerSocketAddr);
@@ -230,7 +308,7 @@ int main(int argc, char** argv){
     exit(0);
 }
 
-void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerCommandPDU) {
+void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerCommandPDU, fd_set* current_set) {
     /* get name of content from user*/
     char contentName[11];
     char tempContentNameBuffer[100]; //temporary buffer for handling inputs
@@ -282,6 +360,9 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
     /* store sd of this TCP socket in a linked list, otherwise lost forever after function call finishes*/
     createAndInsertNodeAtEnd(&head, clientSocketDescriptorTCP, contentName);    
     
+    /* Add the new TCP socket to the master set */
+    FD_SET(clientSocketDescriptorTCP, current_set);
+
     uint16_t networkBytePort = reg_addr.sin_port;
     uint16_t hostBytePort = ntohs(networkBytePort);
     memcpy(registerCommandPDU.data + 20, &networkBytePort, sizeof(networkBytePort));
@@ -383,22 +464,22 @@ void listOnlineContent(int sd, struct sockaddr_in* server_addr) {
     }
 }
 
-void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCommandPDU){
+void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCommandPDU, fd_set* current_set, fd_set* ready_set) {
     char contentName[11];
     char tempContentNameBuffer[100];
     printf("Name of Content to De-register (10 char long) -> ");
     fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
     sscanf(tempContentNameBuffer, "%10s", contentName);
-    while(tempContentNameBuffer[0] == '\n'){ // handle user pressing Enter key
+    while (tempContentNameBuffer[0] == '\n') { // handle user pressing Enter key
         printf("Name of Content to De-register (10 char long) -> ");
         fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
         sscanf(tempContentNameBuffer, "%10s", contentName);
     }
     contentName[10] = '\0'; // Ensure null termination
 
-    memset(deregisterCommandPDU.data, 0, sizeof(deregisterCommandPDU.data));    //zero out
-    memcpy(deregisterCommandPDU.data, peerName, sizeof(peerName));              //set
-    memcpy(deregisterCommandPDU.data + 10, contentName, strlen(contentName));   //set
+    memset(deregisterCommandPDU.data, 0, sizeof(deregisterCommandPDU.data));    // zero out
+    memcpy(deregisterCommandPDU.data, peerName, sizeof(peerName));              // set
+    memcpy(deregisterCommandPDU.data + 10, contentName, strlen(contentName));   // set
 
     if ((sendto(sd, &deregisterCommandPDU, sizeof(deregisterCommandPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in))) == -1) {
         perror("sendto() failed");
@@ -414,28 +495,127 @@ void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCo
     }
 
     if (responsePDU.type == 'A') {
-        printf("Acknowledgement from server: %s\n", responsePDU.data);        
-        removeNodeBySpecificValue(&head, contentName); // Remove from local list only after successful acknowledgement
+        printf("Acknowledgement from server: %s\n", responsePDU.data);
+
+        // Find the socket descriptor for the content
+        sd_node* temp = head;
+        int content_sd = -1;
+        while (temp != NULL) {
+            if (strcmp(temp->contentName, contentName) == 0) {
+                content_sd = temp->sd;
+                break;
+            }
+            temp = temp->next;
+        }
+
+        if (content_sd != -1) {
+            // Remove the socket descriptor from the master and active set
+            FD_CLR(content_sd, current_set);
+            FD_CLR(content_sd, ready_set);
+
+            // Remove the content node from the linked list
+            removeNodeBySpecificValue(&head, contentName);
+        }
+    } else {
+        printf("Error from server: %s\n", responsePDU.data);
+    }
+}
+
+
+void provideContent(int server_sd) {
+    int client_sd;
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);    
+
+    if ((client_sd = accept(server_sd, (struct sockaddr *)&client_addr, &addr_len)) == -1) {
+        perror("accept() error");
+        return;
     }
 
-    else {
-        printf("Error from server: %s\n", responsePDU.data);
-    }    
+    char buffer[100];
+    int bytes_received = recv(client_sd, buffer, sizeof(buffer) - 1, 0);
+    if (bytes_received == -1) {
+        perror("recv error");
+        return;
+    } else {
+        buffer[bytes_received] = '\0';
+        printf("\nMessage from the requesting peer: %s\n", buffer);
+    }
+
+    const char *message = "HELLO HERE 2 GIB U GUD STUFF!";
+    if (send(client_sd, message, strlen(message), 0) == -1) {
+        perror("send error");
+        return;
+    }
+
+    close(client_sd);    
 }
 
 void downloadContent(int sd, struct sockaddr_in* server_addr){   
+    
+    /* request index server to search for a content provider. returns port # (host byte format)*/
     uint16_t contentPort_networkByte = searchContent(sd, server_addr);
     if (contentPort_networkByte == 0){
         return;
     }
-    
     uint16_t contentPort_hostByte = ntohs(contentPort_networkByte);
     printf("Content found at\thost port:\t%u\n", (unsigned int)contentPort_hostByte);
     printf("\t\t\tnetwork port:\t%u\n", (unsigned int)contentPort_networkByte);
 
-    printf("starting downloading procedure...\n");
+    int sd_providerLink;
+    if ((sd_providerLink = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+		fprintf(stderr, "Can't creat a socket\n");
+		exit(1);
+	}
+
+    struct sockaddr_in content_server;
+    bzero((char *)&content_server, sizeof(struct sockaddr_in));
+    content_server.sin_family = AF_INET;
+    content_server.sin_port = contentPort_networkByte;
+
+    // struct	hostent	*hp;
+    //... WHAT HOST IP ???
+
+    if (inet_pton(AF_INET, "127.0.0.1", &content_server.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address/ Address not supported \n");
+        close(sd_providerLink);
+        return;
+    }
+
+    if (connect(sd_providerLink, (struct sockaddr *)&content_server, sizeof(content_server)) == -1) {
+        fprintf(stderr, "Connection Failed \n");
+        close(sd_providerLink);
+        return;
+    }
+    
+    const char *message = "Hello from the requesting peer.";
+    if (send(sd_providerLink, message, strlen(message), 0) == -1) {
+        perror("send error");
+        close(sd_providerLink);
+        return;
+    }
+    
+    char buffer[100];
+    int bytes_received = recv(sd_providerLink, buffer, sizeof(buffer) - 1, 0);
+    if (bytes_received == -1) {
+        perror("recv error");
+        return;
+    } else {
+        buffer[bytes_received] = '\0';
+        printf("Message from the content provider: %s\n", buffer);
+    }
+
+    close(sd_providerLink);
 }
 
+
+/** 
+ * @sd: The socket descriptor for communication with the index server.
+ * @server_addr: The sockaddr_in structure containing the index server address.
+ *
+ * Return: The network byte order port number of the peer with the requested content, 
+ *         or 0 if an error occurs or the content is not found.
+ */
 uint16_t searchContent(int sd, struct sockaddr_in* server_addr) {
     pdu searchCommandPDU;
     searchCommandPDU.type = 'S';    
