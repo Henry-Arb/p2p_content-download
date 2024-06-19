@@ -20,6 +20,7 @@ typedef struct pdu {
 } pdu;
 
 typedef struct content_node {
+    int usage;
     char peerName[11];
     char contentName[11];
     uint16_t port;
@@ -39,6 +40,7 @@ content_node* createContentNode(char* peerName, char* contentName, uint16_t port
         printf("Error: malloc failed to allocate memory for new node\n");
         exit(1);
     }
+    newNode->usage = 0;
     strncpy(newNode->peerName, peerName, sizeof(newNode->peerName) - 1);
     newNode->peerName[sizeof(newNode->peerName) - 1] = '\0';        // null terminate
     strncpy(newNode->contentName, contentName, sizeof(newNode->contentName) - 1);
@@ -273,21 +275,31 @@ void searchContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketA
     contentName[10] = '\0'; // Null terminate
 
     content_node* temp = head;
+    content_node* leastUsedNode = NULL;
+
     while (temp != NULL) {
         if (strcmp(temp->contentName, contentName) == 0) {
-            pdu responsePDU;
-            responsePDU.type = 'S';
-            uint16_t networkBytePort = htons(temp->port);
-            printf("sending network_port=%u\n", (unsigned int)networkBytePort);
-            memcpy(responsePDU.data, &networkBytePort, sizeof(networkBytePort));
-            sendto(serverSocketDescriptor, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
-            return;
+            if (leastUsedNode == NULL || (temp->usage) < (leastUsedNode->usage)) {
+                leastUsedNode = temp;
+            }
         }
         temp = temp->next;
     }
-    
-    pdu errorPDU;
-    errorPDU.type = 'E';
-    snprintf(errorPDU.data, sizeof(errorPDU.data), "Content not found.");
-    sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
+
+    if (leastUsedNode != NULL) {
+        pdu responsePDU;
+        responsePDU.type = 'S';
+        uint16_t networkBytePort = htons(leastUsedNode->port);
+        printf("sending network_port=%u(from %s)\n", (unsigned int)networkBytePort, leastUsedNode->peerName);
+        memcpy(responsePDU.data, &networkBytePort, sizeof(networkBytePort));
+
+        leastUsedNode->usage += 1;
+
+        sendto(serverSocketDescriptor, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
+    } else {
+        pdu errorPDU;
+        errorPDU.type = 'E';
+        snprintf(errorPDU.data, sizeof(errorPDU.data), "Content not found.");
+        sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
+    }
 }

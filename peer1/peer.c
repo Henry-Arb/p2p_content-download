@@ -695,6 +695,34 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
 
     printf("Content downloaded successfully.\n");
 
+    printf("Registering content...");
+
+    pdu registerPDU;
+    registerPDU.type = 'R';
+    memset(registerPDU.data, 0, sizeof(registerPDU.data));
+    memcpy(registerPDU.data, peerName, sizeof(peerName));
+    memcpy(registerPDU.data + 10, contentName, strlen(contentName));
+
+    if (sendto(sd, &registerPDU, sizeof(registerPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in)) == -1) {
+        perror("sendto() failed");
+        return;
+    }
+
+    pdu responsePDU;
+    int addr_len = sizeof(struct sockaddr_in);
+    int n;
+    if ((n = recvfrom(sd, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)server_addr, &addr_len)) == -1) {
+        perror("recvfrom error\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (responsePDU.type == 'O') {
+        printf("Online Content:\n%s\n", responsePDU.data);
+    } else {
+        printf("Unexpected response from server.\n");
+    }
+
+
 
     close(sd_providerLink);
 }
