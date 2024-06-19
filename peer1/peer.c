@@ -32,7 +32,7 @@ sd_node* head = NULL;   // Global variable for linked list head also makes it ea
 void registerContent(int, struct sockaddr_in*, pdu, fd_set*);
 void deregisterContent(int, struct sockaddr_in*, pdu, fd_set*, fd_set*);
 void listOnlineContent(int, struct sockaddr_in*);
-void downloadContent(int, struct sockaddr_in*);
+void downloadContent(int, struct sockaddr_in*, fd_set*);
 uint16_t searchContent(int, struct sockaddr_in*, char*);
 void provideContent(int);
 void quit(int, struct sockaddr_in*);
@@ -229,7 +229,7 @@ int main(int argc, char** argv){
                         listOnlineContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
                         break;
                     case 'D':
-                        downloadContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
+                        downloadContent(clientSocketDescriptorUDP, &indexServerSocketAddr, &current_sockets);
                         break;
                     case 'E':
                         errorMessage(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU);
@@ -244,7 +244,8 @@ int main(int argc, char** argv){
         }
 
         /* Check if the opps have intercepted our TCP sockets */
-        for (int i = 0; i < FD_SETSIZE; i++) {
+        int i;
+        for (i = 0; i < FD_SETSIZE; i++) {
             if (FD_ISSET(i, &ready_sockets) && i != fileno(stdin)) {
                 provideContent(i);
             }
@@ -522,7 +523,6 @@ void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCo
     }
 }
 
-
 void provideContent(int server_sd) {
     int client_sd;
     struct sockaddr_in client_addr;
@@ -591,7 +591,7 @@ void provideContent(int server_sd) {
     close(client_sd);    
 }
 
-void downloadContent(int sd, struct sockaddr_in* server_addr){
+void downloadContent(int sd, struct sockaddr_in* server_addr, fd_set* current_set){
     char contentName[11];
     char tempContentNameBuffer[100];
     printf("Name of Content to Download (10 char long) -> ");
@@ -683,10 +683,7 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
             break;
         }
         fwrite(responsePDU.data, 1, bytes_received - sizeof(char), contentFile);
-    }
-
-    fclose(contentFile);
-    close(sd_providerLink);
+    }    
 
     if (bytes_received == -1) {
         perror("recv error");
@@ -695,36 +692,84 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
 
     printf("Content downloaded successfully.\n");
 
-    printf("Registering content...");
+    fclose(contentFile);    
+
+    printf("Registering content ...\n");
+
+    // Create TCP socket for peer becoming a content server
+    int clientSocketDescriptorTCP;
+    if ((clientSocketDescriptorTCP = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("Couldn't create TCP socket\n");
+        exit(EXIT_FAILURE);
+    }
+
+    struct sockaddr_in reg_addr;
+    reg_addr.sin_family = AF_INET;
+    reg_addr.sin_port = htons(0); // Assign 0 to htons() => TCP module to choose a unique port number
+    reg_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    if ((bind(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, sizeof(reg_addr))) == -1) {
+        perror("Couldn't bind server sd to address struct");
+        exit(EXIT_FAILURE);
+    }
+
+    if ((listen(clientSocketDescriptorTCP, CONTENT_SERVER_BACKLOG)) == -1) {
+        perror("Listening error");
+        exit(EXIT_FAILURE);
+    }
+
+    socklen_t alen = sizeof(struct sockaddr_in);
+    if (getsockname(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, &alen) == -1) {
+        perror("getsockname() failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Store sd of this TCP socket in a linked list, otherwise lost forever after function call finishes
+    createAndInsertNodeAtEnd(&head, clientSocketDescriptorTCP, contentName);
+
+    // Add the new TCP socket to the master set
+    FD_SET(clientSocketDescriptorTCP, current_set);
+    // FD_SET(clientSocketDescriptorTCP, ready_set);
+    // ready_set
+
+    uint16_t networkBytePort = reg_addr.sin_port;
+    uint16_t hostBytePort = ntohs(networkBytePort);
 
     pdu registerPDU;
     registerPDU.type = 'R';
     memset(registerPDU.data, 0, sizeof(registerPDU.data));
     memcpy(registerPDU.data, peerName, sizeof(peerName));
     memcpy(registerPDU.data + 10, contentName, strlen(contentName));
+    memcpy(registerPDU.data + 20, &networkBytePort, sizeof(networkBytePort));
+
+    printf("Peer Name:\t\t%s\n", registerPDU.data);
+    printf("Content Name:\t\t%s\n", registerPDU.data + 10);
+    printf("Host Port Number:\t%u\n", (unsigned int)hostBytePort);
+    printf("Network Port Number:\t%u\n", (unsigned int)(*(uint16_t*)(registerPDU.data + 20)));
+    printf("Network Port Number:\t%u\n", (unsigned int)networkBytePort);
 
     if (sendto(sd, &registerPDU, sizeof(registerPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in)) == -1) {
         perror("sendto() failed");
-        return;
+        exit(EXIT_FAILURE);
     }
 
-    pdu responsePDU;
+    pdu responsePDU_2;
     int addr_len = sizeof(struct sockaddr_in);
     int n;
-    if ((n = recvfrom(sd, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)server_addr, &addr_len)) == -1) {
+    if ((n = recvfrom(sd, &responsePDU_2, sizeof(responsePDU_2), 0, (struct sockaddr*)server_addr, &addr_len)) == -1) {
         perror("recvfrom error\n");
         exit(EXIT_FAILURE);
     }
 
-    if (responsePDU.type == 'O') {
-        printf("Online Content:\n%s\n", responsePDU.data);
+    if (responsePDU_2.type == 'A') {
+        printf("Acknowledgement from server: %s\n", responsePDU_2.data);
+        close(sd_providerLink);
+        return;
     } else {
-        printf("Unexpected response from server.\n");
+        perror("Couldn't register as a new provider.\n");
+        close(sd_providerLink);
+        return;
     }
-
-
-
-    close(sd_providerLink);
 }
 
 
@@ -760,7 +805,7 @@ uint16_t searchContent(int sd, struct sockaddr_in* server_addr, char* contentNam
 
     if (responsePDU.type == 'S') {
         uint16_t networkBytePort;
-        memcpy(&networkBytePort, responsePDU.data, sizeof(uint16_t));        
+        memcpy(&networkBytePort, responsePDU.data, sizeof(uint16_t));
         return networkBytePort;
     } 
     else if (responsePDU.type == 'E') {
