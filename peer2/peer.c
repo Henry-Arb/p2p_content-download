@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 
 #define DEFAULT_PORT_NUMBER     3000
 #define DEFAULT_HOST_NAME       "localhost"
@@ -26,10 +27,11 @@ typedef struct sd_node {
     struct sd_node* next;
 } sd_node;
 
-char peerName[11];      // Global variable for peer name makes it easier to deal with
-sd_node* head = NULL;   // Global variable for linked list head also makes it easier
+char peerName[11];   
+sd_node* head = NULL;
 fd_set sockets_masterSet;
 fd_set sockets_activeSet;
+char* indexServer;
 
 char* promptContentName(int);
 void registerContent(int, struct sockaddr_in*, char*);
@@ -39,8 +41,8 @@ void downloadContent(int, struct sockaddr_in*);
 uint16_t searchContent(int, struct sockaddr_in*, char*);
 void provideContent(int);
 void quit(int, struct sockaddr_in*);
-
 void printErrorType(int errorCode);
+void listLocalFiles();
 
 /*********************** sd_node linked-list struct operations ***********************/
 void printNodeList(sd_node* head) {
@@ -113,13 +115,10 @@ void removeNodeBySpecificValue(sd_node** head, char* contentName) {
     close(temp->sd);  // Close the TCP socket
     free(temp); // Free memory
 }
-
 /*************************************************************************************/
 
-
 int main(int argc, char** argv){
-    /* get&set server port # */
-    char* indexServer;
+    /* get&set server port # */    
     int indexPort;
     switch(argc){
         case 1:
@@ -148,6 +147,7 @@ int main(int argc, char** argv){
     struct hostent *indexServerName;
     if ( indexServerName = gethostbyname(indexServer) ){
         memcpy(&indexServerSocketAddr.sin_addr, indexServerName-> h_addr, indexServerName->h_length);
+        indexServer = inet_ntoa(*(struct in_addr *)indexServerName->h_addr); // Convert to IP address string
     }
     else if ( (indexServerSocketAddr.sin_addr.s_addr = inet_addr(indexServer)) == INADDR_NONE ){
 		perror("Couldn't get host entry\n");
@@ -246,7 +246,10 @@ int main(int argc, char** argv){
                         break;
                     case 'L':
                         printNodeList(head);
-                        break;            
+                        break;
+                    case 'l':
+                        listLocalFiles();
+                        break;
                     default:
                         printf("Input Error.\n");
                         break;
@@ -636,7 +639,7 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
 
 
     //CHANGE TO #DEFINE
-    if (inet_pton(AF_INET, "127.0.0.1", &content_server.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, indexServer, &content_server.sin_addr) <= 0) {
         fprintf(stderr, "Invalid address/ Address not supported \n");
         close(sd_providerLink);
         return;
@@ -713,7 +716,6 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
     registerContent(sd, server_addr, contentName);    
 }
 
-
 /** 
  * @sd: The socket descriptor for communication with the index server.
  * @server_addr: The sockaddr_in structure containing the index server address.
@@ -783,5 +785,26 @@ void printErrorType(int errorCode){
         case 3:
             printf("Error from server: Search Fail.\n");
             break;
+    }
+}
+
+void listLocalFiles() {
+    pid_t pid = fork();
+
+    if (pid == -1) {
+        perror("fork");
+        exit(EXIT_FAILURE);
+    } else if (pid == 0) {
+        // Child process
+        char *args[] = {"ls", NULL};
+        execvp(args[0], args);
+        
+        // If execvp fails
+        perror("execvp");
+        exit(EXIT_FAILURE);
+    } else {
+        // Parent process
+        int status;
+        waitpid(pid, &status, 0);
     }
 }
