@@ -185,9 +185,8 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
     int error = 0;
 
     if (checkContentConflict(head, peerName, contentName)) {
-        error = 1;
-        printf("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
-        printf("Registration Naming Error:\n");
+        error = 1;        
+        printf("\nxxxxxxxxxxxxxxxxxxxxxxx Registration Naming Conflict xxxxxxxxxxxxxxxxxxxxxxx\n");
         pdu errorPDU;
         errorPDU.type = 'E';        
         errorPDU.data[0] = '0';
@@ -205,20 +204,20 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
 
         pdu acknowledgementPDU;
         acknowledgementPDU.type = 'A';
-        snprintf(acknowledgementPDU.data, sizeof(acknowledgementPDU.data), "Acnkowledgement from Index Server on %s.", pts);
+        snprintf(acknowledgementPDU.data, sizeof(acknowledgementPDU.data), "Acknowledgement From Index Server on %s", pts);
         sendto(serverSocketDescriptor, &acknowledgementPDU, sizeof(acknowledgementPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
     }
     if (error != 1)
-        printf("------------------------------------------------------------------------\n");
+        printf("----------------------------------------------------------------------------\n");
     printf("Extracted Peer Name:\t\t%s\n", peerName);
     printf("Extracted Content Name:\t\t%s\n", contentName);
     printf("Extracted Network Port Number:\t%u\n", (unsigned int)htons(port)); 
     printf("Converted Host Port Number:\t%u\n", (unsigned int)port);
     
     if (error !=1)
-        printf("------------------------------------------------------------------------\n\n");
+        printf("----------------------------------------------------------------------------\n\n");
     else
-        printf("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n");
+        printf("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n");
 }
 
 void deregisterContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketAddr, socklen_t clientSocketAddrLength, pdu deregisterCommandPDU) {
@@ -241,9 +240,9 @@ void deregisterContent(int serverSocketDescriptor, struct sockaddr_in* clientSoc
                 prev->next = temp->next;
             }
             
-            printf("------------------------------------------------------------------------\n");
-            printf("De-Registering %s from %s\n", temp->contentName, temp->peerName);
-            printf("------------------------------------------------------------------------\n\n");
+            printf("----------------------------------------------------------------------------\n");
+            printf("De-Registering '%s' from [%s]\n", temp->contentName, temp->peerName);
+            printf("----------------------------------------------------------------------------\n\n");
 
             free(temp); //free the shi
 
@@ -307,11 +306,17 @@ void searchContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketA
         pdu responsePDU;
         responsePDU.type = 'S';
         uint16_t networkBytePort = htons(leastUsedNode->port);
-        printf("sending network_port=%u(from %s)\n", (unsigned int)networkBytePort, leastUsedNode->peerName);
+        
+        char clientIP[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(clientSocketAddr->sin_addr), clientIP, INET_ADDRSTRLEN);
+        uint16_t clientPort = ntohs(clientSocketAddr->sin_port);
+
+        printf("\n------------------------------- Port Forward -------------------------------\n");
+        printf("Sending Network_Port=%u (%s) to Client UDP_Port=(%u)\n", (unsigned int)networkBytePort, leastUsedNode->peerName, (unsigned int)clientPort);
+        printf("----------------------------------------------------------------------------\n\n");
+        
         memcpy(responsePDU.data, &networkBytePort, sizeof(networkBytePort));
-
         leastUsedNode->usage += 1;
-
         sendto(serverSocketDescriptor, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
     } else {
         pdu errorPDU;

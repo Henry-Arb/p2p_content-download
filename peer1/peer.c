@@ -254,12 +254,12 @@ int main(int argc, char** argv){
             }
         }
     }
-
+    
     printf("\n------------------------ De-registering all content ------------------------\n");
     quit(clientSocketDescriptorUDP, &indexServerSocketAddr);
     printf("----------------------------------------------------------------------------\n");
 
-    printf("\n\nEXITING PROGRAM.\n");
+    printf("\nEXITING PROGRAM.\n");
     close(clientSocketDescriptorUDP);
     exit(0);
 }
@@ -307,14 +307,7 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
         perror("bind() error");
         exit(EXIT_FAILURE);
     }
-
-    // put this after acknowledgement -------------------------------------------
-    if((listen(clientSocketDescriptorTCP, CONTENT_SERVER_BACKLOG)) == -1){
-        perror("listen() error");
-        exit(EXIT_FAILURE);
-    }
-    //---------------------------------------------------------------------------
-
+    
     socklen_t alen = sizeof(struct sockaddr_in);
     if (getsockname(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, &alen) == -1) {
         perror("getsockname() error");
@@ -323,7 +316,7 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
 
     uint16_t networkBytePort = reg_addr.sin_port;
     uint16_t hostBytePort = ntohs(networkBytePort);
-    memcpy(registerCommandPDU.data + 20, &networkBytePort, sizeof(networkBytePort));    
+    memcpy(registerCommandPDU.data + 20, &networkBytePort, sizeof(networkBytePort));
     
     if (sendto(sd, &registerCommandPDU, sizeof(registerCommandPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in)) == -1) {
         perror("sendto() failed");
@@ -339,7 +332,13 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
     }
     
     if (responsePDU.type == 'A') {
-        printf("Acknowledgement from server: %s\n", responsePDU.data);
+        printf("\n----------------------------------------------------------------------------\n");
+        printf("%s", responsePDU.data);
+
+        if((listen(clientSocketDescriptorTCP, CONTENT_SERVER_BACKLOG)) == -1){
+            perror("listen() error");
+            exit(EXIT_FAILURE);
+        }
 
         /* store sd of this TCP socket in a linked list, otherwise lost forever after function call finishes*/
         createAndInsertNodeAtEnd(&head, clientSocketDescriptorTCP, contentName);    
@@ -351,7 +350,7 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
         printf("Host Port Number:\t%u\n", (unsigned int)hostBytePort);
         printf("Network Port Number:\t%u\n", (unsigned int)(*(uint16_t *)(registerCommandPDU.data + 20)));
         /* printf("Network Port Number:\t%u\n", (unsigned int)networkBytePort); // just to check if the pointer to registerCommandPDU.data+20 really is pointing to the right*value */
-        printf("\n");
+        printf("----------------------------------------------------------------------------\n\n");
 
         return;
     }
@@ -387,6 +386,11 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
 
                 if (responsePDU.type == 'A') {
                     printf("Acknowledgement from server: %s\n", responsePDU.data);
+
+                    if((listen(clientSocketDescriptorTCP, CONTENT_SERVER_BACKLOG)) == -1){
+                        perror("listen() error");
+                        exit(EXIT_FAILURE);
+                    }
 
                     /* store sd of this TCP socket in a linked list, otherwise lost forever after function call finishes*/
                     createAndInsertNodeAtEnd(&head, clientSocketDescriptorTCP, contentName);    
@@ -562,17 +566,7 @@ void provideContent(int server_sd) {
 }
 
 void downloadContent(int sd, struct sockaddr_in* server_addr){
-    char contentName[11];
-    char tempContentNameBuffer[100];
-    printf("Name of Content to Download (10 char long) -> ");
-    fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
-    sscanf(tempContentNameBuffer, "%10s", contentName);
-    while(tempContentNameBuffer[0] == '\n'){ // Handle user pressing Enter key
-        printf("Name of Content to Download (10 char long) -> ");
-        fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
-        sscanf(tempContentNameBuffer, "%10s", contentName);
-    }
-    contentName[10] = '\0';
+    char* contentName = promptContentName();
     
     /* request index server to search for a content provider. returns port # (host byte format)*/
     uint16_t contentPort_networkByte = searchContent(sd, server_addr, contentName);
@@ -597,6 +591,8 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
     // struct	hostent	*hp;
     //... WHAT HOST IP ???
 
+
+    //CHANGE TO #DEFINE
     if (inet_pton(AF_INET, "127.0.0.1", &content_server.sin_addr) <= 0) {
         fprintf(stderr, "Invalid address/ Address not supported \n");
         close(sd_providerLink);
@@ -662,82 +658,13 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
 
     printf("Content downloaded successfully.\n");
 
-    fclose(contentFile);    
+    fclose(contentFile);
 
     printf("Registering content ...\n");
-
-    // Create TCP socket for peer becoming a content server
-    int clientSocketDescriptorTCP;
-    if ((clientSocketDescriptorTCP = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        perror("Couldn't create TCP socket\n");
-        exit(EXIT_FAILURE);
-    }
-
-    struct sockaddr_in reg_addr;
-    reg_addr.sin_family = AF_INET;
-    reg_addr.sin_port = htons(0); // Assign 0 to htons() => TCP module to choose a unique port number
-    reg_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    if ((bind(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, sizeof(reg_addr))) == -1) {
-        perror("Couldn't bind server sd to address struct");
-        exit(EXIT_FAILURE);
-    }
-
-    if ((listen(clientSocketDescriptorTCP, CONTENT_SERVER_BACKLOG)) == -1) {
-        perror("Listening error");
-        exit(EXIT_FAILURE);
-    }
-
-    socklen_t alen = sizeof(struct sockaddr_in);
-    if (getsockname(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, &alen) == -1) {
-        perror("getsockname() failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // Store sd of this TCP socket in a linked list, otherwise lost forever after function call finishes
-    createAndInsertNodeAtEnd(&head, clientSocketDescriptorTCP, contentName);
-
-    // Add the new TCP socket to the master set
-    FD_SET(clientSocketDescriptorTCP, &sockets_masterSet);    
-
-    uint16_t networkBytePort = reg_addr.sin_port;
-    uint16_t hostBytePort = ntohs(networkBytePort);
-
+    
     pdu registerPDU;
     registerPDU.type = 'R';
-    memset(registerPDU.data, 0, sizeof(registerPDU.data));
-    memcpy(registerPDU.data, peerName, sizeof(peerName));
-    memcpy(registerPDU.data + 10, contentName, strlen(contentName));
-    memcpy(registerPDU.data + 20, &networkBytePort, sizeof(networkBytePort));
-
-    printf("Peer Name:\t\t%s\n", registerPDU.data);
-    printf("Content Name:\t\t%s\n", registerPDU.data + 10);
-    printf("Host Port Number:\t%u\n", (unsigned int)hostBytePort);
-    printf("Network Port Number:\t%u\n", (unsigned int)(*(uint16_t*)(registerPDU.data + 20)));
-    printf("Network Port Number:\t%u\n", (unsigned int)networkBytePort);
-
-    if (sendto(sd, &registerPDU, sizeof(registerPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in)) == -1) {
-        perror("sendto() failed");
-        exit(EXIT_FAILURE);
-    }
-
-    pdu responsePDU_2;
-    int addr_len = sizeof(struct sockaddr_in);
-    int n;
-    if ((n = recvfrom(sd, &responsePDU_2, sizeof(responsePDU_2), 0, (struct sockaddr*)server_addr, &addr_len)) == -1) {
-        perror("recvfrom error\n");
-        exit(EXIT_FAILURE);
-    }
-
-    if (responsePDU_2.type == 'A') {
-        printf("Acknowledgement from server: %s\n", responsePDU_2.data);
-        close(sd_providerLink);
-        return;
-    } else {
-        perror("Couldn't register as a new provider.\n");
-        close(sd_providerLink);
-        return;
-    }
+    registerContent(sd, server_addr, registerPDU, contentName);    
 }
 
 
