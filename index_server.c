@@ -178,14 +178,20 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
     memcpy(peerName, registerCommandPDU.data, 10);
     memcpy(contentName, registerCommandPDU.data + 10, 10);
     memcpy(&port, registerCommandPDU.data + 20, sizeof(uint16_t));
-    peerName[10] = '\0';    //null terminate
-    contentName[10] = '\0'; //null terminate
-    port = ntohs(port);     //turning it back to host-byte format
+    peerName[10] = '\0';    // null terminate
+    contentName[10] = '\0'; // null terminate
+    port = ntohs(port);     // turning it back to host-byte format
 
-    if (checkContentConflict(head, peerName, contentName)) {        
+    int error = 0;
+
+    if (checkContentConflict(head, peerName, contentName)) {
+        error = 1;
+        printf("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+        printf("Registration Naming Error:\n");
         pdu errorPDU;
-        errorPDU.type = 'E';
-        snprintf(errorPDU.data, sizeof(errorPDU.data), "Conflict: %s already registered as %s", contentName, peerName);
+        errorPDU.type = 'E';        
+        errorPDU.data[0] = '0';
+        errorPDU.data[1] = '\0';    // null terminate
         sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
     } else {        
         insertContentNodeAtEnd(&head, peerName, contentName, port);
@@ -202,11 +208,17 @@ void registerContent(int serverSocketDescriptor, struct sockaddr_in* clientSocke
         snprintf(acknowledgementPDU.data, sizeof(acknowledgementPDU.data), "Acnkowledgement from Index Server on %s.", pts);
         sendto(serverSocketDescriptor, &acknowledgementPDU, sizeof(acknowledgementPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
     }
-
+    if (error != 1)
+        printf("------------------------------------------------------------------------\n");
     printf("Extracted Peer Name:\t\t%s\n", peerName);
     printf("Extracted Content Name:\t\t%s\n", contentName);
     printf("Extracted Network Port Number:\t%u\n", (unsigned int)htons(port)); 
-    printf("Converted Host Port Number:\t%u\n", (unsigned int)port);       
+    printf("Converted Host Port Number:\t%u\n", (unsigned int)port);
+    
+    if (error !=1)
+        printf("------------------------------------------------------------------------\n\n");
+    else
+        printf("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n");
 }
 
 void deregisterContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketAddr, socklen_t clientSocketAddrLength, pdu deregisterCommandPDU) {
@@ -228,6 +240,11 @@ void deregisterContent(int serverSocketDescriptor, struct sockaddr_in* clientSoc
             } else {
                 prev->next = temp->next;
             }
+            
+            printf("------------------------------------------------------------------------\n");
+            printf("De-Registering %s from %s\n", temp->contentName, temp->peerName);
+            printf("------------------------------------------------------------------------\n\n");
+
             free(temp); //free the shi
 
             pdu acknowledgementPDU;
