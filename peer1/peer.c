@@ -29,10 +29,11 @@ typedef struct sd_node {
 char peerName[11];      // Global variable for peer name makes it easier to deal with
 sd_node* head = NULL;   // Global variable for linked list head also makes it easier
 fd_set sockets_masterSet;
+fd_set sockets_activeSet;
 
-char* promptContentName();
-void registerContent(int, struct sockaddr_in*, pdu, char* contentName);
-void deregisterContent(int, struct sockaddr_in*, pdu, fd_set*);
+char* promptContentName(int);
+void registerContent(int, struct sockaddr_in*, char*);
+void deregisterContent(int, struct sockaddr_in*, char*);
 void listOnlineContent(int, struct sockaddr_in*);
 void downloadContent(int, struct sockaddr_in*);
 uint16_t searchContent(int, struct sockaddr_in*, char*);
@@ -40,7 +41,6 @@ void provideContent(int);
 void quit(int, struct sockaddr_in*);
 
 void printErrorType(int errorCode);
-void readAcknowledgement(int socketDescriptor, struct sockaddr_in* server_addr);
 
 /*********************** sd_node linked-list struct operations ***********************/
 void printNodeList(sd_node* head) {
@@ -180,7 +180,7 @@ int main(int argc, char** argv){
     char tempCommandBuffer[100]; //temporary buffer for handling bad command inputs
     
     /* set up fd_sets to track TCP socket activity */
-    fd_set sockets_activeSet;
+    
     FD_ZERO(&sockets_masterSet);
     FD_ZERO(&sockets_activeSet);
     FD_SET(0, &sockets_masterSet);  // 0 for stdin
@@ -212,32 +212,41 @@ int main(int argc, char** argv){
                 commandPDU.type = commandType;
                 switch (commandType) {
                     case '?':
+                        printf("[O]:\tList ONLINE Content\n");
                         printf("\n[R]:\tContent Registration\n");
                         printf("[T]:\tContent De-registration\n");
-                        printf("[L]:\tList LOCAL Content\n");
                         printf("[D]:\tDownload Content\n");
-                        printf("[O]:\tList ONLINE Content\n");
+                        printf("[L]:\tList LOCALLY Registered Content\n");
+                        printf("[l]:\tList LOCAL Content\n");
                         printf("[Q]:\tQuit\n\n");
                         break;
                     case 'R':{
-                        char* contentName = promptContentName();
+                        char* contentName = promptContentName(0);
                         if (contentName != NULL) {
-                            registerContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU, contentName);
+                            registerContent(clientSocketDescriptorUDP, &indexServerSocketAddr, contentName);
+                            free(contentName);  // Free the allocated memory for content name
+                        }
+                        printNodeList(head);
+                        break;
+                    }
+                    case 'T':{
+                        char* contentName = promptContentName(2);
+                        if (contentName != NULL) {
+                            deregisterContent(clientSocketDescriptorUDP, &indexServerSocketAddr, contentName);
                             free(contentName);  // Free the allocated memory for content name
                         }                        
                         printNodeList(head);
                         break;
                     }
-                    case 'T':
-                        deregisterContent(clientSocketDescriptorUDP, &indexServerSocketAddr, commandPDU, &sockets_activeSet);
-                        printNodeList(head);
-                        break;
                     case 'O':
                         listOnlineContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
                         break;
                     case 'D':
                         downloadContent(clientSocketDescriptorUDP, &indexServerSocketAddr);
-                        break;                    
+                        break;
+                    case 'L':
+                        printNodeList(head);
+                        break;            
                     default:
                         printf("Input Error.\n");
                         break;
@@ -264,18 +273,40 @@ int main(int argc, char** argv){
     exit(0);
 }
 
-char* promptContentName(){
+char* promptContentName(int promptChoice){
+    int promptChoiceSize;
+    const char* promptMessage;
+
+    switch(promptChoice){
+        case 0: // "register" = 8 + '\0' = 9
+            promptChoiceSize = 9;
+            promptMessage = "Register";
+            break;
+        case 1: // "download" = 8 + '\0' = 9
+            promptChoiceSize = 9;
+            promptMessage = "Download";
+            break;
+        case 2: // "de-register" = 11 + '\0' = 12
+            promptChoiceSize = 12;
+            promptMessage = "De-register";
+            break;
+        default: // "enter" = 5 + '\0' = 6
+            promptChoiceSize = 6;
+            promptMessage = "enter";
+            break;
+    }    
+    
     char* contentName = malloc(11); //using malloc here as returning local variable pointer is not guaranteed to be saved forever outside the function. malloc saves to heap so it'll stay alive outside of function
     if (contentName == NULL) {
         printf("malloc() error for contentName\n");
         exit(EXIT_FAILURE);
     }
     char tempContentNameBuffer[100]; //temporary buffer for handling inputs
-    printf("Name of Content (10 char long) -> ");
+    printf("Name of Content (10 char long) to %s-> ", promptMessage);
     fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
     sscanf(tempContentNameBuffer, "%10s", contentName);    
     while(tempContentNameBuffer[0] == '\n'){ //handle user pressing Enter key
-        printf("Name of Content (10 char long) -> ");
+        printf("Name of Content (10 char long) to %s -> ", promptMessage);
         fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
         sscanf(tempContentNameBuffer, "%10s", contentName);
     }
@@ -283,7 +314,10 @@ char* promptContentName(){
     return contentName;
 }
 
-void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerCommandPDU, char* contentName) {
+void registerContent(int sd, struct sockaddr_in* server_addr, char* contentName) {
+    pdu registerCommandPDU;
+    registerCommandPDU.type = 'R';    
+    
     /* zero out the data field of the pdu, just in case */
     memset(registerCommandPDU.data, 0, sizeof(registerCommandPDU.data));
     
@@ -306,8 +340,8 @@ void registerContent(int sd, struct sockaddr_in* server_addr, pdu registerComman
     if ( (bind(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, sizeof(reg_addr))) == -1){
         perror("bind() error");
         exit(EXIT_FAILURE);
-    }
-    
+    }   
+
     socklen_t alen = sizeof(struct sockaddr_in);
     if (getsockname(clientSocketDescriptorTCP, (struct sockaddr*)&reg_addr, &alen) == -1) {
         perror("getsockname() error");
@@ -434,26 +468,19 @@ void listOnlineContent(int sd, struct sockaddr_in* server_addr) {
     }
 
     if (responsePDU.type == 'O') {
-        printf("Online Content:\n%s\n", responsePDU.data);
+        printf("\n------------------------------ Online Content ------------------------------\n");
+        printf("%s\n", responsePDU.data);
+        printf("----------------------------------------------------------------------------\n\n");
     } else {
         printf("Unexpected response from server.\n");
     }
 }
 
-void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCommandPDU, fd_set* ready_set) {
-    char contentName[11];
-    char tempContentNameBuffer[100];
-    printf("Name of Content to De-register (10 char long) -> ");
-    fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
-    sscanf(tempContentNameBuffer, "%10s", contentName);
-    while (tempContentNameBuffer[0] == '\n') { // handle user pressing Enter key
-        printf("Name of Content to De-register (10 char long) -> ");
-        fgets(tempContentNameBuffer, sizeof(tempContentNameBuffer), stdin);
-        sscanf(tempContentNameBuffer, "%10s", contentName);
-    }
-    contentName[10] = '\0';
-
+void deregisterContent(int sd, struct sockaddr_in* server_addr, char* contentName) {
+    pdu deregisterCommandPDU;
+    deregisterCommandPDU.type = 'T';    
     memset(deregisterCommandPDU.data, 0, sizeof(deregisterCommandPDU.data));    // zero out
+
     memcpy(deregisterCommandPDU.data, peerName, sizeof(peerName));              // set
     memcpy(deregisterCommandPDU.data + 10, contentName, strlen(contentName));   // set
 
@@ -487,13 +514,19 @@ void deregisterContent(int sd, struct sockaddr_in* server_addr, pdu deregisterCo
         if (content_sd != -1) {
             // Remove the socket descriptor from the master and active set
             FD_CLR(content_sd, &sockets_masterSet);
-            FD_CLR(content_sd, ready_set);
+            FD_CLR(content_sd, &sockets_activeSet);
 
             // Remove the content node from the linked list
             removeNodeBySpecificValue(&head, contentName);
         }
-    } else {
-        printf("Error from server: %s\n", responsePDU.data);
+    } 
+    else if (responsePDU.type == 'E'){
+        printErrorType(atoi(responsePDU.data));
+        printf("De-registration cancelled.\n");
+    }
+    
+    else {
+        printf("Unexpected server response.\n");
     }
 }
 
@@ -542,19 +575,29 @@ void provideContent(int server_sd) {
     strncpy(contentName, requestPDU.data, 10);
     contentName[10] = '\0';
 
+    pdu responsePDU;
+
     FILE *contentFile = fopen(contentName, "rb");
     if (contentFile == NULL) {
-        perror("File not found");
+        
+        responsePDU.type = 'E';
+        responsePDU.data[0] = '1';
+        responsePDU.data[1] = '\0';
+
+        if (send(client_sd, &responsePDU, sizeof(responsePDU), 0) == -1) {
+            perror("send() error");            
+        }
+
+        perror("File not found.\n");
         close(client_sd);
         return;
     }
 
-    pdu responsePDU;
     responsePDU.type = 'C';
     size_t bytesRead;
     while ((bytesRead = fread(responsePDU.data, 1, CONTENT_CHUNK_SIZE, contentFile)) > 0) {
         if (send(client_sd, &responsePDU, sizeof(pdu), 0) == -1) {
-            perror("send error");
+            perror("send() error");
             fclose(contentFile);
             close(client_sd);
             return;
@@ -566,7 +609,7 @@ void provideContent(int server_sd) {
 }
 
 void downloadContent(int sd, struct sockaddr_in* server_addr){
-    char* contentName = promptContentName();
+    char* contentName = promptContentName(1);
     
     /* request index server to search for a content provider. returns port # (host byte format)*/
     uint16_t contentPort_networkByte = searchContent(sd, server_addr, contentName);
@@ -644,10 +687,17 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
     pdu responsePDU;
     int bytes_received;
     while ((bytes_received = recv(sd_providerLink, &responsePDU, sizeof(responsePDU), 0)) > 0) {
-        if (responsePDU.type != 'C') {
-            perror("Unexpected PDU type received");
-            break;
+        if(responsePDU.type == 'E'){
+            printErrorType(atoi(responsePDU.data));
+            printf("Registration Cancelled.\n");
+            return;
         }
+        else if (responsePDU.type != 'C') {
+            perror("Unexpected PDU type received");
+            printf("Registration Cancelled.\n");
+            return;
+        }
+        
         fwrite(responsePDU.data, 1, bytes_received - sizeof(char), contentFile);
     }    
 
@@ -657,14 +707,10 @@ void downloadContent(int sd, struct sockaddr_in* server_addr){
     }
 
     printf("Content downloaded successfully.\n");
-
     fclose(contentFile);
 
     printf("Registering content ...\n");
-    
-    pdu registerPDU;
-    registerPDU.type = 'R';
-    registerContent(sd, server_addr, registerPDU, contentName);    
+    registerContent(sd, server_addr, contentName);    
 }
 
 
@@ -704,7 +750,7 @@ uint16_t searchContent(int sd, struct sockaddr_in* server_addr, char* contentNam
         return networkBytePort;
     } 
     else if (responsePDU.type == 'E') {
-        printf("Error from server: %s\n", responsePDU.data);
+        printErrorType(atoi(responsePDU.data));
         return 0;
     }
     
@@ -713,44 +759,10 @@ uint16_t searchContent(int sd, struct sockaddr_in* server_addr, char* contentNam
 }
 
 void quit(int sd, struct sockaddr_in* server_addr) {
-
-    /* 
-    unfortunately can't make use of the already existing 
-    deregisterContent() function since it actually
-    prompts for the name of the content instead of automatically
-    removing from linked list    
-    */
-
     sd_node* temp = head;
-    pdu commandPDU;
-    commandPDU.type = 'T';
-
     while (temp != NULL) {
         sd_node* next = temp->next;
-        memset(commandPDU.data, 0, sizeof(commandPDU.data));
-
-        memcpy(commandPDU.data, peerName, sizeof(peerName));
-        memcpy(commandPDU.data + 10, temp->contentName, sizeof(temp->contentName));
-        
-        if (sendto(sd, &commandPDU, sizeof(commandPDU), 0, (struct sockaddr*)server_addr, sizeof(struct sockaddr_in)) == -1) {
-            perror("sendto() failed");
-        }
-
-        pdu responsePDU;
-        int addr_len = sizeof(struct sockaddr_in);
-        int n;
-        if ((n = recvfrom(sd, &responsePDU, sizeof(responsePDU), 0, (struct sockaddr*)server_addr, &addr_len)) == -1) {
-            perror("recvfrom error\n");
-        }
-
-        if (responsePDU.type == 'A') {
-            printf("Acknowledgement from server: %s\n", responsePDU.data);
-            close(temp->sd);  // Close the TCP socket
-            free(temp);       // Free the memory
-        } 
-        else {
-            printf("Error from server: %s\n", responsePDU.data);
-        }
+        deregisterContent(sd, server_addr, temp->contentName);
         temp = next;
     }
 
@@ -762,16 +774,14 @@ void printErrorType(int errorCode){
         case 0:
             printf("Error from server: naming conflict.\n");
             break;
+        case 1:
+            printf("Error from peer: File does not exist.\n");
+            break;
+        case 2:
+            printf("Error from server: Content not found.\n");
+            break;
+        case 3:
+            printf("Error from server: Search Fail.\n");
+            break;
     }
-}
-
-void readAcknowledgement(int sd, struct sockaddr_in* server_addr) {
-    pdu ackPDU;
-    socklen_t addr_len = sizeof(struct sockaddr_in);
-    int n = recvfrom(sd, &ackPDU, sizeof(ackPDU), 0, (struct sockaddr*)server_addr, &addr_len);
-    if (n < 0) {
-        perror("Error reading from socket");
-        exit(EXIT_FAILURE);
-    }
-    printf("Acknowledgement from server: %s\n", ackPDU.data);
 }

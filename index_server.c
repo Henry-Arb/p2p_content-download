@@ -258,7 +258,8 @@ void deregisterContent(int serverSocketDescriptor, struct sockaddr_in* clientSoc
 
     pdu errorPDU;
     errorPDU.type = 'E';
-    snprintf(errorPDU.data, sizeof(errorPDU.data), "Content not found for de-registration.");
+    errorPDU.data[0] = '2';
+    errorPDU.data[1] = '\0';
     sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
 }
 
@@ -321,7 +322,8 @@ void searchContent(int serverSocketDescriptor, struct sockaddr_in* clientSocketA
     } else {
         pdu errorPDU;
         errorPDU.type = 'E';
-        snprintf(errorPDU.data, sizeof(errorPDU.data), "Content not found.");
+        errorPDU.data[0] = '3';
+        errorPDU.data[1] = '\0';        
         sendto(serverSocketDescriptor, &errorPDU, sizeof(errorPDU), 0, (struct sockaddr*)clientSocketAddr, clientSocketAddrLength);
     }
 }
