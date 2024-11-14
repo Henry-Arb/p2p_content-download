@@ -102,6 +102,14 @@ int main(int argc, char** argv){
     serverSocketAddr.sin_port = htons((u_short)port);
     serverSocketAddr.sin_addr.s_addr = INADDR_ANY;
 
+    // // Bind to a specific virtual IP address
+    // const char* virtual_ip = "192.168.1.100";  // Replace with your virtual IP
+    // if (inet_pton(AF_INET, virtual_ip, &serverSocketAddr.sin_addr) <= 0) {
+    //     perror("inet_pton() failed");
+    //     exit(EXIT_FAILURE);
+    // }
+
+
     /* bind server socket with address struct*/
     if( (bind(serverSocketDescriptor, (struct sockaddr*)&serverSocketAddr, sizeof(serverSocketAddr))) == -1 ){
         perror("Couldn't bind server sd to address struct");
